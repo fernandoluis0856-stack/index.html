@@ -1,0 +1,214 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leitor de Audiolivros IA</title>
+
+<script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+
+<style>
+* { box-sizing:border-box; }
+body {
+  margin:0;
+  background:#101116;
+  color:#fff;
+  font-family:Arial,sans-serif;
+}
+header {
+  padding:25px 15px;
+  text-align:center;
+  background:#191b24;
+}
+h1 { color:#d6ad65; margin:0; }
+main { padding:20px; max-width:650px; margin:auto; }
+.card {
+  background:#1c1e28;
+  padding:20px;
+  border-radius:15px;
+  margin-bottom:18px;
+}
+button, select, input {
+  padding:13px;
+  border:0;
+  border-radius:9px;
+  margin:5px 2px;
+}
+button {
+  background:#c69b53;
+  color:#111;
+  font-weight:bold;
+}
+button:active { opacity:.7; }
+#reader {
+  background:#f5eedf;
+  color:#29251f;
+  padding:20px;
+  min-height:250px;
+  border-radius:12px;
+  line-height:1.8;
+  overflow:auto;
+  max-height:450px;
+}
+#status { color:#d6ad65; }
+input[type=file] { max-width:100%; background:#fff; color:#111; }
+</style>
+</head>
+
+<body>
+<header>
+<h1>LEITOR IA</h1>
+<p>Seu espaço de conhecimento e audiolivros</p>
+</header>
+
+<main>
+<div class="card">
+<h3>📚 Minha biblioteca</h3>
+<input type="file" id="file" accept=".epub">
+<p id="status">Escolha seu livro EPUB.</p>
+</div>
+
+<div class="card">
+<h3>📖 Leitura</h3>
+<div id="reader">Seu livro aparecerá aqui.</div>
+<br>
+<button onclick="previous()">◀ Anterior</button>
+<button onclick="next()">Próximo ▶</button>
+</div>
+
+<div class="card">
+<h3>🎧 Audiolivro</h3>
+<label>Voz:</label>
+<select id="voice"></select>
+
+<br>
+<label>Velocidade:</label>
+<select id="speed">
+<option value="0.8">0.8x</option>
+<option value="1" selected>1.0x</option>
+<option value="1.2">1.2x</option>
+<option value="1.5">1.5x</option>
+<option value="2">2.0x</option>
+</select>
+
+<br><br>
+<button onclick="speak()">▶ Ouvir</button>
+<button onclick="pause()">⏸ Pausar</button>
+<button onclick="resume()">Continuar</button>
+<button onclick="stop()">⏹ Parar</button>
+</div>
+</main>
+
+<script>
+let book;
+let rendition;
+let currentText = "";
+
+const fileInput = document.getElementById("file");
+const statusText = document.getElementById("status");
+
+fileInput.addEventListener("change", async function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  if (book) book.destroy();
+  stop();
+
+  statusText.textContent = "Carregando livro...";
+
+  try {
+    const buffer = await file.arrayBuffer();
+    book = ePub(buffer);
+
+    rendition = book.renderTo("reader", {
+      width: "100%",
+      height: 400,
+      spread: "none"
+    });
+
+    await rendition.display();
+
+    rendition.on("relocated", async function(location) {
+      const section = book.spine.get(location.start.index);
+      if (!section) return;
+
+      try {
+        const contents = await section.load(book.load.bind(book));
+        currentText = contents.document.body.innerText;
+        statusText.textContent = file.name;
+      } catch(err) {
+        console.log(err);
+      }
+    });
+
+    statusText.textContent = "Livro carregado!";
+  } catch(error) {
+    statusText.textContent = "Erro ao abrir EPUB.";
+    console.error(error);
+  }
+});
+
+function next() {
+  if (rendition) rendition.next();
+}
+
+function previous() {
+  if (rendition) rendition.prev();
+}
+
+function speak() {
+  if (!currentText) {
+    alert("Abra um livro primeiro.");
+    return;
+  }
+
+  stop();
+
+  const utterance = new SpeechSynthesisUtterance(currentText);
+  utterance.lang = "pt-BR";
+  utterance.rate = Number(document.getElementById("speed").value);
+
+  const selected = document.getElementById("voice").value;
+  const voices = speechSynthesis.getVoices();
+
+  if (selected !== "") {
+    utterance.voice = voices[Number(selected)];
+  }
+
+  speechSynthesis.speak(utterance);
+}
+
+function pause() {
+  speechSynthesis.pause();
+}
+
+function resume() {
+  speechSynthesis.resume();
+}
+
+function stop() {
+  speechSynthesis.cancel();
+}
+
+function loadVoices() {
+  const select = document.getElementById("voice");
+  const voices = speechSynthesis.getVoices();
+
+  select.innerHTML = "";
+
+  voices.forEach((voice, index) => {
+    if (voice.lang.startsWith("pt")) {
+      const option = document.createElement("option");
+      option.value = index;
+      option.textContent = voice.name + " (" + voice.lang + ")";
+      select.appendChild(option);
+    }
+  });
+}
+
+loadVoices();
+speechSynthesis.onvoiceschanged = loadVoices;
+</script>
+</body>
+</html>
