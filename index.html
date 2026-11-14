@@ -3,6 +3,251 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101116">
+<title>Leitor de IA</title>
+<script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101116;color:#fff;font-family:Arial,sans-serif}
+header{background:#191b24;padding:22px 16px;text-align:center}
+header h1{margin:0;color:#d6ad65;font-size:25px}
+header p{color:#aaa;margin:7px 0 0}
+main{padding:18px;max-width:750px;margin:auto}
+.card{background:#191b24;border:1px solid #30313a;border-radius:14px;padding:16px;margin-bottom:15px}
+button,.upload{border:0;border-radius:9px;padding:13px;background:#d6ad65;color:#171717;font-weight:bold;font-size:15px;cursor:pointer}
+button:disabled{opacity:.4}
+.controls{display:flex;gap:8px;flex-wrap:wrap}
+.controls button{flex:1;min-width:85px}
+input[type=file]{display:none}
+select,input[type=range]{width:100%;margin-top:10px}
+select{padding:12px;background:#292b35;color:white;border:1px solid #444;border-radius:8px}
+#book{height:48vh;min-height:300px;background:#fff;color:#222;border-radius:10px;overflow:hidden}
+#book iframe{background:white}
+h2{font-size:18px;color:#d6ad65;margin-top:0}
+.info{color:#aaa;font-size:13px}
+#status{color:#d6ad65;margin-top:10px;font-size:14px}
+footer{text-align:center;color:#777;font-size:12px;padding:20px}
+</style>
+</head>
+<body>
+<header>
+<h1>LEITOR DE IA</h1>
+<p>Seu espaço de leitura e conhecimento</p>
+</header>
+
+<main>
+<section class="card">
+<h2>Minha biblioteca</h2>
+<label class="upload" for="arquivo">📚 Abrir livro EPUB</label>
+<input type="file" id="arquivo" accept=".epub,application/epub+zip">
+<p id="nome" class="info">Nenhum livro aberto</p>
+<div id="status">Pronto para começar.</div>
+</section>
+
+<section class="card">
+<h2>Meu livro</h2>
+<div id="book"></div>
+<div class="controls" style="margin-top:12px">
+<button id="anterior">◀ Anterior</button>
+<button id="proximo">Próximo ▶</button>
+</div>
+</section>
+
+<section class="card">
+<h2>🎧 Audiolivro</h2>
+<div class="controls">
+<button id="play">▶ Reproduzir</button>
+<button id="pause">⏸ Pausar</button>
+<button id="stop">⏹ Parar</button>
+</div>
+
+<label for="voz">Escolher voz:</label>
+<select id="voz"><option>Carregando vozes...</option></select>
+
+<label for="velocidade">Velocidade da leitura:</label>
+<input type="range" id="velocidade" min="0.7" max="1.5" step="0.1" value="1">
+<p class="info">Velocidade: <span id="valorVelocidade">1.0x</span></p>
+</section>
+
+<section class="card">
+<h2>Como funciona</h2>
+<p class="info">Abra seu EPUB, escolha uma voz disponível no celular e aperte reproduzir. Você pode pausar e continuar quando quiser.</p>
+</section>
+</main>
+
+<footer>LEITOR DE IA • Sua biblioteca particular</footer>
+
+<script>
+let book=null;
+let rendition=null;
+let capitulos=[];
+let indice=0;
+let textoAtual="";
+let fala=null;
+let vozes=[];
+
+const $=id=>document.getElementById(id);
+
+function status(msg){$("status").textContent=msg;}
+
+function carregarVozes(){
+ vozes=window.speechSynthesis.getVoices();
+ const select=$("voz");
+ select.innerHTML="";
+ const brasileiras=vozes.filter(v=>v.lang.toLowerCase().startsWith("pt"));
+ const lista=brasileiras.length?brasileiras:vozes;
+ lista.forEach((v,i)=>{
+  const op=document.createElement("option");
+  op.value=vozes.indexOf(v);
+  op.textContent=v.name+" ("+v.lang+")";
+  select.appendChild(op);
+ });
+ const masculina=lista.find(v=>/male|mascul|antonio|daniel|ricardo/i.test(v.name));
+ if(masculina)select.value=vozes.indexOf(masculina);
+}
+if("speechSynthesis" in window){
+ carregarVozes();
+ speechSynthesis.onvoiceschanged=carregarVozes;
+}else{
+ status("Seu navegador não oferece leitura em voz alta.");
+}
+
+function guardarArquivo(file){
+ const req=indexedDB.open("LeitorIA",1);
+ req.onupgradeneeded=e=>e.target.result.createObjectStore("livros");
+ req.onsuccess=e=>{
+  const db=e.target.result;
+  db.transaction("livros","readwrite").objectStore("livros").put(file,"ultimo");
+ };
+}
+
+function recuperarArquivo(){
+ const req=indexedDB.open("LeitorIA",1);
+ req.onupgradeneeded=e=>e.target.result.createObjectStore("livros");
+ req.onsuccess=e=>{
+  const db=e.target.result;
+  const get=db.transaction("livros","readonly").objectStore("livros").get("ultimo");
+  get.onsuccess=()=>{
+   if(get.result)abrirLivro(get.result,false);
+  };
+ };
+}
+
+$("arquivo").addEventListener("change",e=>{
+ const file=e.target.files[0];
+ if(file)abrirLivro(file,true);
+});
+
+async function abrirLivro(file,salvar){
+ try{
+  parar();
+  if(book)book.destroy();
+  $("nome").textContent=file.name;
+  status("Abrindo seu livro...");
+  if(salvar)guardarArquivo(file);
+
+  const buffer=await file.arrayBuffer();
+  book=ePub(buffer);
+  await book.ready;
+  capitulos=book.spine.items;
+  indice=0;
+
+  rendition=book.renderTo("book",{
+   width:"100%",
+   height:"100%",
+   spread:"none"
+  });
+
+  rendition.themes.default({
+   body:{
+    "font-family":"Georgia,serif",
+    "font-size":"18px",
+    "line-height":"1.7",
+    "padding":"18px",
+    "color":"#222",
+    "background":"#fff"
+   }
+  });
+
+  await mostrarCapitulo(0);
+  status("Livro aberto com sucesso!");
+ }catch(err){
+  console.error(err);
+  status("Não foi possível abrir. Verifique se o arquivo é EPUB.");
+ }
+}
+
+async function mostrarCapitulo(i){
+ if(!capitulos.length)return;
+ indice=Math.max(0,Math.min(i,capitulos.length-1));
+ parar();
+ await rendition.display(capitulos[indice].href);
+ status("Capítulo "+(indice+1)+" de "+capitulos.length);
+}
+
+$("anterior").onclick=()=>mostrarCapitulo(indice-1);
+$("proximo").onclick=()=>mostrarCapitulo(indice+1);
+
+function obterTexto(){
+ try{
+  const contents=rendition.getContents();
+  return contents.map(c=>c.document.body.innerText||"").join(" ").trim();
+ }catch(e){return "";}
+}
+
+function parar(){
+ if("speechSynthesis" in window)speechSynthesis.cancel();
+ fala=null;
+}
+
+$("play").onclick=()=>{
+ if(!book){status("Abra primeiro um livro EPUB.");return;}
+ parar();
+ textoAtual=obterTexto();
+ if(!textoAtual){status("Não encontrei texto neste capítulo.");return;}
+
+ fala=new SpeechSynthesisUtterance(textoAtual);
+ fala.lang="pt-BR";
+ fala.rate=parseFloat($("velocidade").value);
+ const escolha=vozes[parseInt($("voz").value)];
+ if(escolha)fala.voice=escolha;
+ fala.onstart=()=>status("Reproduzindo audiolivro...");
+ fala.onend=()=>status("Fim da leitura deste capítulo.");
+ fala.onerror=()=>status("Não foi possível iniciar a voz.");
+ speechSynthesis.speak(fala);
+};
+
+$("pause").onclick=()=>{
+ if(speechSynthesis.speaking){
+  if(speechSynthesis.paused){
+   speechSynthesis.resume();
+   status("Leitura continuando...");
+  }else{
+   speechSynthesis.pause();
+   status("Leitura pausada.");
+  }
+ }
+};
+
+$("stop").onclick=()=>{
+ parar();
+ status("Leitura parada.");
+};
+
+$("velocidade").oninput=e=>{
+ $("valorVelocidade").textContent=parseFloat(e.target.value).toFixed(1)+"x";
+};
+
+recuperarArquivo();
+</script>
+</body>
+</html>
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Leitor de Audiolivros IA</title>
 
